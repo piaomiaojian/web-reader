@@ -22,6 +22,7 @@ export default function Reader() {
   const navigate = useNavigate();
   const viewerRef = useRef(null);
   const txtContainerRef = useRef(null); // 專門給 TXT 用
+  const epubBookRef = useRef(null);
   const renditionRef = useRef(null);    // 用於 effect 清理，避免閉包抓到錯的 rendition（Strict Mode 雙重掛載）
   const isTurningRef = useRef(false);   // 翻頁鎖，避免連續點擊造成 epub.js 狀態錯亂
 
@@ -35,6 +36,8 @@ export default function Reader() {
   const [txtContentRaw, setTxtContentRaw] = useState(''); // TXT 原文，供繁簡轉換
   const [rendition, setRendition] = useState(null);
   const [isReady, setIsReady] = useState(false); // 確保內容載入才允許操作
+  const [toc, setToc] = useState([]);
+  const [showToc, setShowToc] = useState(false);
   const textModeRef = useRef(textMode);
   textModeRef.current = textMode;
 
@@ -66,6 +69,9 @@ export default function Reader() {
         renditionRef.current.destroy();
         renditionRef.current = null;
       }
+      epubBookRef.current = null;
+      setToc([]);
+      setShowToc(false);
     };
   }, [id]);
 
@@ -73,6 +79,7 @@ export default function Reader() {
   const renderEpub = (data, savedCfi) => {
     if (!viewerRef.current) return;
     const book = ePub(data);
+    epubBookRef.current = book;
     const rend = book.renderTo(viewerRef.current, {
       width: '100%',
       height: '100%',
@@ -96,6 +103,15 @@ export default function Reader() {
 
     const startLoc = savedCfi && savedCfi !== 0 ? savedCfi : undefined;
     rend.display(startLoc).then(() => setIsReady(true));
+
+    book.loaded.navigation
+      .then((nav) => {
+        setToc(nav?.toc || []);
+      })
+      .catch((err) => {
+        console.error('讀取目錄失敗:', err);
+        setToc([]);
+      });
 
     rend.on('relocated', (location) => {
       updateProgress(Number(id), location.start.cfi);
@@ -226,6 +242,16 @@ export default function Reader() {
     }
   };
 
+  const goToTocItem = (href) => {
+    if (!rendition || !href) return;
+    rendition.display(href)
+      .then(() => {
+        setShowToc(false);
+        setShowMenu(false);
+      })
+      .catch((err) => console.error('章節跳轉失敗:', err));
+  };
+
   return (
     <div className={`relative w-full h-screen overflow-hidden ${themeStyles[theme]}`}>
       
@@ -233,8 +259,36 @@ export default function Reader() {
       <div className={`absolute top-0 left-0 w-full p-4 flex justify-between items-center bg-white border-b border-gray-200 transition-transform duration-300 text-gray-800 ${showMenu ? 'translate-y-0 z-50' : '-translate-y-full z-30'}`}>
         <button onClick={() => navigate('/')}><ArrowLeft /></button>
         <span className="font-bold truncate max-w-[200px]">{bookData?.title}</span>
-        <button><Menu /></button>
+        <button onClick={() => setShowToc((prev) => !prev)}><Menu /></button>
       </div>
+
+      {/* 章節目錄 */}
+      {bookData?.type === 'epub' && (
+        <div className={`absolute top-0 right-0 h-full w-[min(320px,85vw)] bg-white border-l border-gray-200 text-gray-800 z-50 transition-transform duration-300 ${showToc ? 'translate-x-0' : 'translate-x-full'}`}>
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <span className="font-semibold">章節目錄</span>
+            <button className="text-sm px-2 py-1 border rounded hover:bg-gray-100" onClick={() => setShowToc(false)}>關閉</button>
+          </div>
+          <div className="h-[calc(100%-57px)] overflow-y-auto p-2">
+            {toc.length > 0 ? (
+              <ul className="space-y-1">
+                {toc.map((item) => (
+                  <li key={item.id || item.href}>
+                    <button
+                      onClick={() => goToTocItem(item.href)}
+                      className="w-full text-left px-3 py-2 rounded hover:bg-gray-100 text-sm"
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500 px-3 py-2">此書沒有可用章節目錄。</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 閱讀核心區域 */}
     <div className="w-full h-full relative">
@@ -251,7 +305,7 @@ export default function Reader() {
 
             {/* 中間喚起選單區 */}
             <div 
-            onClick={() => setShowMenu(!showMenu)}
+            onClick={() => setShowMenu((prev) => !prev)}
             className="w-[60%] h-full pointer-events-auto cursor-pointer"
             ></div>
 
